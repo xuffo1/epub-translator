@@ -5,6 +5,17 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
-    exclude: ['lucide-react'],
+    include: ['epubjs', 'jszip'],
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          epubjs: ['epubjs'],
+          jszip: ['jszip'],
+          react: ['react', 'react-dom'],
+        }
+      }
+    }
+  }
 });

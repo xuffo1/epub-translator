@@ -4,11 +4,12 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EPUB Reader with Translation</title>
+    <title>Enhanced EPUB Reader</title>
     <script type="text/javascript">
       function googleTranslateElementInit() {
         new google.translate.TranslateElement({
-          pageLanguage: 'en',
+          pageLanguage: 'auto', // El idioma original de la página
+          includedLanguages: 'zh-CN,es,en,hi,ar,bn,pt,ru,ja,pa,de,jv,wu,ko,fr,te,vi,mr,ta,tr,ur,it,yue,th,gu,jin,fa,pl,uk,ro',
           layout: google.translate.TranslateElement.InlineLayout.SIMPLE
         }, 'google_translate_element');
       }
