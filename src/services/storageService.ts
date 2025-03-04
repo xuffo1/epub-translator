@@ -1,9 +1,10 @@
-import { Bookmark, ReaderSettings, DEFAULT_READER_SETTINGS } from '../types';
+import { Bookmark, ReaderSettings, DEFAULT_READER_SETTINGS, Highlight } from '../types';
 
 // Storage keys
 const BOOKMARKS_KEY = 'epub_reader_bookmarks';
 const READER_SETTINGS_KEY = 'epub_reader_settings';
 const READING_PROGRESS_KEY = 'epub_reader_progress';
+const HIGHLIGHTS_KEY = 'epub_reader_highlights';
 
 // Bookmarks
 export const getBookmarks = (bookId: string): Bookmark[] => {
@@ -48,6 +49,64 @@ export const removeBookmark = (bookId: string, cfi: string): void => {
     localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(allBookmarks));
   } catch (error) {
     console.error('Error removing bookmark:', error);
+  }
+};
+
+// Highlights
+export const getHighlights = (bookId: string): Highlight[] => {
+  try {
+    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
+    return allHighlights[bookId] || [];
+  } catch (error) {
+    console.error('Error getting highlights:', error);
+    return [];
+  }
+};
+
+export const saveHighlight = (bookId: string, highlight: Highlight): void => {
+  try {
+    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
+    const bookHighlights = allHighlights[bookId] || [];
+    
+    // Check if highlight with same CFI already exists
+    const existingIndex = bookHighlights.findIndex((h: Highlight) => h.cfi === highlight.cfi);
+    
+    if (existingIndex >= 0) {
+      // Update existing highlight
+      bookHighlights[existingIndex] = highlight;
+    } else {
+      // Add new highlight
+      bookHighlights.push(highlight);
+    }
+    
+    allHighlights[bookId] = bookHighlights;
+    localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(allHighlights));
+  } catch (error) {
+    console.error('Error saving highlight:', error);
+  }
+};
+
+export const removeHighlight = (bookId: string, cfi: string): void => {
+  try {
+    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
+    const bookHighlights = allHighlights[bookId] || [];
+    
+    allHighlights[bookId] = bookHighlights.filter((h: Highlight) => h.cfi !== cfi);
+    localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(allHighlights));
+  } catch (error) {
+    console.error('Error removing highlight:', error);
+  }
+};
+
+export const removeAllHighlightsForBook = (bookId: string): void => {
+  try {
+    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
+    if (allHighlights[bookId]) {
+      delete allHighlights[bookId];
+      localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(allHighlights));
+    }
+  } catch (error) {
+    console.error('Error removing all highlights for book:', error);
   }
 };
 
@@ -156,6 +215,7 @@ export const removeRecentBook = (bookId: string): void => {
     // Also remove any bookmarks and reading progress for this book
     removeAllBookmarksForBook(bookId);
     removeReadingProgress(bookId);
+    removeAllHighlightsForBook(bookId);
   } catch (error) {
     console.error('Error removing recent book:', error);
   }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ReaderSettings as ReaderSettingsType, FONT_FAMILIES } from '../types';
+import { ReaderSettings as ReaderSettingsType } from '../types';
 import { 
   Type, 
   AlignJustify, 
@@ -32,15 +32,6 @@ const ReaderSettings: React.FC<ReaderSettingsProps> = ({
     onSettingsChange({ ...settings, lineHeight: newLineHeight });
   };
 
-  const handleMarginChange = (delta: number) => {
-    const newMargin = Math.max(0, Math.min(40, settings.margin + delta));
-    onSettingsChange({ ...settings, margin: newMargin });
-  };
-
-  const handleFontFamilyChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    onSettingsChange({ ...settings, fontFamily: e.target.value });
-  };
-
   const handleThemeChange = (theme: 'light' | 'sepia' | 'dark') => {
     onSettingsChange({ ...settings, theme });
   };
@@ -48,10 +39,10 @@ const ReaderSettings: React.FC<ReaderSettingsProps> = ({
   const resetToDefaults = () => {
     onSettingsChange({
       fontSize: 100,
-      fontFamily: 'serif',
+      fontFamily: 'serif', // Mantenemos el valor por defecto aunque no se muestre la opción
       lineHeight: 1.5,
       theme: 'light',
-      margin: 20
+      margin: 20 // Mantenemos el valor por defecto aunque no se muestre la opción
     });
   };
 
@@ -101,25 +92,6 @@ const ReaderSettings: React.FC<ReaderSettingsProps> = ({
           </div>
         </div>
 
-        {/* Font Family */}
-        <div>
-          <label className="flex items-center text-sm font-medium text-gray-700 mb-2">
-            <Type className="w-4 h-4 mr-2" />
-            Font Family
-          </label>
-          <select
-            value={settings.fontFamily}
-            onChange={handleFontFamilyChange}
-            className="w-full p-2 border border-gray-300 rounded-md"
-          >
-            {FONT_FAMILIES.map((font) => (
-              <option key={font.value} value={font.value}>
-                {font.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
         {/* Line Height */}
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -147,38 +119,6 @@ const ReaderSettings: React.FC<ReaderSettingsProps> = ({
               onClick={() => handleLineHeightChange(0.1)}
               className="p-2 rounded-md bg-gray-100 hover:bg-gray-200"
               aria-label="Increase line height"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Margins */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium text-gray-700">
-              Margins
-            </label>
-            <span className="text-sm text-gray-500">{settings.margin}%</span>
-          </div>
-          <div className="flex items-center">
-            <button 
-              onClick={() => handleMarginChange(-5)}
-              className="p-2 rounded-md bg-gray-100 hover:bg-gray-200"
-              aria-label="Decrease margins"
-            >
-              <Minus className="w-4 h-4" />
-            </button>
-            <div className="flex-1 mx-2 h-2 bg-gray-200 rounded-full">
-              <div 
-                className="h-2 bg-blue-500 rounded-full" 
-                style={{ width: `${settings.margin * 2.5}%` }}
-              ></div>
-            </div>
-            <button 
-              onClick={() => handleMarginChange(5)}
-              className="p-2 rounded-md bg-gray-100 hover:bg-gray-200"
-              aria-label="Increase margins"
             >
               <Plus className="w-4 h-4" />
             </button>

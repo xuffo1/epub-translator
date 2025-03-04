@@ -27,6 +27,14 @@ export interface Bookmark {
   createdAt: number;
 }
 
+export interface Highlight {
+  cfi: string;
+  text: string;
+  color: string;
+  chapter?: string;
+  createdAt: number;
+}
+
 export interface ReaderSettings {
   fontSize: number;
   fontFamily: string;
@@ -39,6 +47,15 @@ export type LanguageOption = {
   code: string;
   name: string;
 };
+
+// Highlight colors
+export const HIGHLIGHT_COLORS = [
+  { id: 'yellow', value: '#ffeb3b' },
+  { id: 'pink', value: '#f8bbd0' },
+  { id: 'blue', value: '#90caf9' },
+  { id: 'green', value: '#c5e1a5' },
+  { id: 'purple', value: '#d1c4e9' }
+];
 
 // Comprehensive language list for translation
 export const LANGUAGES: LanguageOption[] = [

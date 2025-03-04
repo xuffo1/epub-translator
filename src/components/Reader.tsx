@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ePub from 'epubjs';
-import { BookLocation, BookMetadata, ReaderSettings as ReaderSettingsType, Bookmark, DEFAULT_READER_SETTINGS } from '../types';
+import { BookLocation, BookMetadata, ReaderSettings as ReaderSettingsType, Bookmark, Highlight, DEFAULT_READER_SETTINGS, HIGHLIGHT_COLORS } from '../types';
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -10,11 +10,14 @@ import {
   Settings,
   Search,
   X,
-  Languages
+  Highlighter,
+  Copy
 } from 'lucide-react';
 import TranslationPanel from './TranslationPanel';
 import ReaderSettingsComponent from './ReaderSettings';
 import BookmarksList from './BookmarksList';
+import HighlightsList from './HighlightsList';
+import HighlightMenu from './HighlightMenu';
 import { 
   getBookmarks, 
   saveBookmark, 
@@ -23,7 +26,10 @@ import {
   saveReaderSettings,
   saveReadingProgress,
   getReadingProgress,
-  generateBookId
+  generateBookId,
+  getHighlights,
+  saveHighlight,
+  removeHighlight
 } from '../services/storageService';
 
 // Import JSZip explicitly to ensure it's available
@@ -34,7 +40,7 @@ interface ReaderProps {
   onClose: () => void;
 }
 
-type SidebarContent = 'toc' | 'bookmarks' | 'settings' | 'search';
+type SidebarContent = 'toc' | 'bookmarks' | 'settings' | 'search' | 'highlights';
 
 interface MenuPosition {
   x: number;
@@ -55,6 +61,7 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
+  const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [readerSettings, setReaderSettings] = useState<ReaderSettingsType>(DEFAULT_READER_SETTINGS);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -63,6 +70,12 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
   const [currentChapter, setCurrentChapter] = useState<string>('');
   const [showTranslateMenu, setShowTranslateMenu] = useState(false);
   const [menuPosition, setMenuPosition] = useState<MenuPosition>({ x: 0, y: 0 });
+  const [showHighlightMenu, setShowHighlightMenu] = useState(false);
+  const [currentSelection, setCurrentSelection] = useState<{
+    cfiRange: string;
+    text: string;
+    contents: any;
+  } | null>(null);
 
   // Generate a unique ID for the book
   useEffect(() => {
@@ -72,11 +85,14 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     }
   }, [file]);
 
-  // Load bookmarks
+  // Load bookmarks and highlights
   useEffect(() => {
     if (bookId) {
       const loadedBookmarks = getBookmarks(bookId);
       setBookmarks(loadedBookmarks);
+      
+      const loadedHighlights = getHighlights(bookId);
+      setHighlights(loadedHighlights);
     }
   }, [bookId]);
 
@@ -131,6 +147,34 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
       }
     }
   }, [rendition, readerSettings]);
+
+  // Apply highlights when rendition or highlights change
+  useEffect(() => {
+    if (rendition && highlights.length > 0) {
+      // First remove all existing highlights to avoid duplicates
+      try {
+        rendition.annotations.clear();
+      } catch (err) {
+        console.error("Error clearing annotations:", err);
+      }
+      
+      // Then add all highlights
+      highlights.forEach(highlight => {
+        try {
+          rendition.annotations.add(
+            "highlight", 
+            highlight.cfi, 
+            {}, 
+            undefined, 
+            "hl", 
+            { fill: highlight.color + "80" }
+          );
+        } catch (err) {
+          console.error("Error adding highlight:", err, highlight);
+        }
+      });
+    }
+  }, [rendition, highlights]);
 
   useEffect(() => {
     let bookInstance: any = null;
@@ -286,46 +330,42 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
             const text = selection.toString().trim();
             if (text && text.length > 0) {
               setSelectedText(text);
-              setShowTranslation(true);
+              setCurrentSelection({
+                cfiRange,
+                text,
+                contents
+              });
+              
+              // Hide translate menu if it's showing
+              setShowTranslateMenu(false);
+              
+              // Show highlight menu instead
+              const range = selection.getRangeAt(0);
+              const rect = range.getBoundingClientRect();
+              
+              if (rect) {
+                const iframe = contents.window.document.defaultView.frameElement;
+                if (iframe) {
+                  const iframeRect = iframe.getBoundingClientRect();
+                  
+                  // Position the menu at the center of the selection
+                  setMenuPosition({
+                    x: iframeRect.left + (rect.left + rect.right) / 2,
+                    y: rect.bottom + iframeRect.top
+                  });
+                  setShowHighlightMenu(true);
+                }
+              }
             }
           } catch (err) {
             console.error("Error in selected handler:", err);
           }
         });
 
-        // Text selection translation
-        newRendition.hooks.content.register((contents: any) => {
-          const document = contents.window.document;
-          const window = contents.window;
-
-          document.addEventListener('mouseup', (event: MouseEvent) => {
-            const selection = window.getSelection();
-            const text = selection?.toString().trim();
-            
-            if (text) {
-              const range = selection?.getRangeAt(0);
-              const rect = range?.getBoundingClientRect();
-              
-              if (rect) {
-                const iframe = document.defaultView?.frameElement as HTMLIFrameElement;
-                if (iframe) {
-                  const iframeRect = iframe.getBoundingClientRect();
-                  setSelectedText(text);
-                  
-                  // Position the menu at the center of the page instead of at the selection
-                  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
-                  setMenuPosition({
-                    x: iframeRect.left + (viewportWidth / 2),
-                    y: rect.bottom + iframeRect.top
-                  });
-                  setShowTranslateMenu(true);
-                  event.preventDefault();
-                }
-              }
-            } else {
-              setShowTranslateMenu(false);
-            }
-          });
+        // Handle click events to hide menus when clicking elsewhere
+        newRendition.on('click', () => {
+          setShowHighlightMenu(false);
+          setShowTranslateMenu(false);
         });
 
       } catch (err) {
@@ -451,6 +491,35 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     setBookmarks(bookmarks.filter(b => b.cfi !== cfi));
   };
 
+  const handleHighlightClick = (highlight: Highlight) => {
+    if (rendition) {
+      try {
+        rendition.display(highlight.cfi);
+        setShowSidebar(false);
+      } catch (err) {
+        console.error("Error navigating to highlight:", err);
+      }
+    }
+  };
+
+  const handleHighlightDelete = (cfi: string) => {
+    if (!bookId) return;
+    
+    removeHighlight(bookId, cfi);
+    
+    // Update local state
+    setHighlights(highlights.filter(h => h.cfi !== cfi));
+    
+    // Remove highlight from rendition
+    if (rendition) {
+      try {
+        rendition.annotations.remove(cfi, "highlight");
+      } catch (err) {
+        console.error("Error removing highlight from rendition:", err);
+      }
+    }
+  };
+
   const handleSettingsChange = (newSettings: ReaderSettingsType) => {
     setReaderSettings(newSettings);
   };
@@ -510,11 +579,74 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     setShowTranslateMenu(false);
   };
 
-  // Toggle Google Translate Function
-  const toggleGoogleTranslate = () => {
-    const frame = document.querySelector('.goog-te-menu-frame') as HTMLIFrameElement;
-    if (frame) {
-      frame.style.display = frame.style.display === 'none' ? 'block' : 'none';
+  // Handle Highlight Function
+  const handleHighlight = (color: string) => {
+    if (!currentSelection || !bookId) return;
+    
+    const { cfiRange, text } = currentSelection;
+    
+    // Create highlight object
+    const newHighlight: Highlight = {
+      cfi: cfiRange,
+      text,
+      color,
+      chapter: currentChapter,
+      createdAt: Date.now()
+    };
+    
+    // Save to localStorage
+    saveHighlight(bookId, newHighlight);
+    
+    // Update local state
+    setHighlights([...highlights, newHighlight]);
+    
+    // Apply highlight to rendition
+    if (rendition) {
+      try {
+        rendition.annotations.add(
+          "highlight", 
+          cfiRange, 
+          {}, 
+          undefined, 
+          "hl", 
+          { fill: color + "80" }
+        );
+      } catch (err) {
+        console.error("Error adding highlight to rendition:", err);
+      }
+    }
+    
+    // Hide menu
+    setShowHighlightMenu(false);
+  };
+
+  // Handle Copy Function
+  const handleCopy = () => {
+    if (currentSelection) {
+      navigator.clipboard.writeText(currentSelection.text)
+        .then(() => {
+          console.log('Text copied to clipboard');
+        })
+        .catch(err => {
+          console.error('Failed to copy text: ', err);
+        });
+      
+      setShowHighlightMenu(false);
+    }
+  };
+
+  // Handle Search for selected text
+  const handleSearchSelected = () => {
+    if (currentSelection) {
+      setSearchQuery(currentSelection.text);
+      setSidebarContent('search');
+      setShowSidebar(true);
+      setShowHighlightMenu(false);
+      
+      // Trigger search after state updates
+      setTimeout(() => {
+        handleSearch();
+      }, 100);
     }
   };
 
@@ -547,42 +679,47 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
           {metadata?.title || 'Loading...'}
         </h1>
         
-        <div className="flex items-center space-x-1">
-          <button 
-            onClick={toggleGoogleTranslate}
-            className={`flex items-center space-x-1 p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-            aria-label="Translate"
-          >
-            <Languages size={18} />
-          </button>
-          <button 
-            onClick={() => toggleSidebar('search')}
-            className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${showSidebar && sidebarContent === 'search' ? 'bg-blue-100 text-blue-600' : ''}`}
-            aria-label="Search"
-          >
-            <Search size={18} />
-          </button>
-          <button 
-            onClick={addBookmark}
-            className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-            aria-label="Add bookmark"
-          >
-            <BookmarkIcon size={18} />
-          </button>
-          <button 
-            onClick={() => toggleSidebar('bookmarks')}
-            className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${showSidebar && sidebarContent === 'bookmarks' ? 'bg-blue-100 text-blue-600' : ''}`}
-            aria-label="Bookmarks"
-          >
-            <BookmarkIcon size={18} className="fill-current" />
-          </button>
-          <button 
-            onClick={() => toggleSidebar('settings')}
-            className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${showSidebar && sidebarContent === 'settings' ? 'bg-blue-100 text-blue-600' : ''}`}
-            aria-label="Settings"
-          >
-            <Settings size={18} />
-          </button>
+        {/* Google Translate Element - Positioned in the header */}
+        <div className="flex items-center">
+          <div id="google_translate_element" className="mr-2 scale-75 origin-right"></div>
+          
+          <div className="flex items-center space-x-1">
+            <button 
+              onClick={() => toggleSidebar('search')}
+              className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${showSidebar && sidebarContent === 'search' ? 'bg-blue-100 text-blue-600' : ''}`}
+              aria-label="Search"
+            >
+              <Search size={18} />
+            </button>
+            <button 
+              onClick={addBookmark}
+              className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+              aria-label="Add bookmark"
+            >
+              <BookmarkIcon size={18} />
+            </button>
+            <button 
+              onClick={() => toggleSidebar('bookmarks')}
+              className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${showSidebar && sidebarContent === 'bookmarks' ? 'bg-blue-100 text-blue-600' : ''}`}
+              aria-label="Bookmarks"
+            >
+              <BookmarkIcon size={18} className="fill-current" />
+            </button>
+            <button 
+              onClick={() => toggleSidebar('highlights')}
+              className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${showSidebar && sidebarContent === 'highlights' ? 'bg-blue-100 text-blue-600' : ''}`}
+              aria-label="Highlights"
+            >
+              <Highlighter size={18} />
+            </button>
+            <button 
+              onClick={() => toggleSidebar('settings')}
+              className={`p-2 rounded-md ${readerSettings.theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-100'} ${showSidebar && sidebarContent === 'settings' ? 'bg-blue-100 text-blue-600' : ''}`}
+              aria-label="Settings"
+            >
+              <Settings size={18} />
+            </button>
+          </div>
         </div>
       </header>
       
@@ -621,6 +758,17 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
                     bookmarks={bookmarks} 
                     onBookmarkClick={handleBookmarkClick} 
                     onBookmarkDelete={handleBookmarkDelete} 
+                  />
+                </div>
+              )}
+              
+              {sidebarContent === 'highlights' && (
+                <div>
+                  <h2 className="text-lg font-medium mb-4">Highlights</h2>
+                  <HighlightsList 
+                    highlights={highlights} 
+                    onHighlightClick={handleHighlightClick} 
+                    onHighlightDelete={handleHighlightDelete} 
                   />
                 </div>
               )}
@@ -808,6 +956,16 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Highlight menu */}
+      {showHighlightMenu && (
+        <HighlightMenu
+          onHighlight={handleHighlight}
+          onCopy={handleCopy}
+          onSearch={handleSearchSelected}
+          position={menuPosition}
+        />
       )}
     </div>
   );
