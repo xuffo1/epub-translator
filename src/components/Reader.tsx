@@ -632,39 +632,76 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
   };
 
   // Modify handleBookmarkClick
-  const handleBookmarkClick = (bookmark: Bookmark) => {
-    if (rendition && book) {
-      try {
-        // Extract percentage from bookmark text (format: "Page XX%")
-        const percentageMatch = bookmark.text.match(/(\d+(\.\d+)?)%/);
-        if (percentageMatch && book.locations) {
-          const percentage = parseFloat(percentageMatch[1]);
-          console.log("Attempting to navigate to percentage:", percentage);
+  const handleBookmarkClick = async (bookmark: Bookmark) => {
+    if (!rendition || !book) return;
 
-          // Ensure locations are generated
-          if (!book.locations.total) {
-            console.log("Generating locations...");
-            book.locations.generate(1024).then(() => {
-              navigateToPercentage(percentage);
-            });
-          } else {
-            navigateToPercentage(percentage);
-          }
-        } else {
-          console.log("Using original bookmark CFI:", bookmark.cfi);
-        rendition.display(bookmark.cfi);
-        }
+    try {
+      // Close sidebar immediately
+      setShowSidebar(false);
+
+      // Extract percentage from bookmark text (format: "Page XX%")
+      const percentageMatch = bookmark.text.match(/(\d+(\.\d+)?)%/);
+      const targetPercentage = percentageMatch ? parseFloat(percentageMatch[1]) : null;
+
+      // Ensure locations are generated
+      if (!book.locations || !book.locations.total) {
+        console.log("Generating locations...");
+        await book.locations.generate(1024);
+      }
+
+      // Create location object before navigation
+      const locationObj = {
+        cfi: bookmark.cfi,
+        href: bookmark.href || '',
+        percentage: targetPercentage || 0,
+        location: 0
+      };
+
+      // Update location state before navigation
+      setLocation(locationObj);
+
+      // Get current translation state
+      const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+      const isTranslated = translateElement?.value ? translateElement.value !== 'original' : false;
+
+      // Save reading progress before navigation
+      await saveReadingProgress(bookId, {
+        ...locationObj,
+        lastRead: Date.now(),
+        isTranslated
+      });
+
+      // Navigate using the bookmark's CFI
+      console.log("Navigating to bookmark CFI:", bookmark.cfi);
+      await rendition.display(bookmark.cfi);
+
+      // Wait a moment for the navigation to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Verify the navigation
+      const currentLocation = rendition.currentLocation();
+      if (currentLocation?.start) {
+        const actualPercentage = book.locations.percentageFromCfi(currentLocation.start.cfi) * 100;
+        console.log("Actual percentage after navigation:", actualPercentage);
         
-        setShowSidebar(false);
-      } catch (err) {
-        console.error("Error navigating to bookmark:", err);
-        // Fallback to original CFI if anything fails
-        try {
-          rendition.display(bookmark.cfi);
-          setShowSidebar(false);
-        } catch (fallbackErr) {
-          console.error("Error using fallback navigation:", fallbackErr);
+        // If we're significantly off from the target percentage
+        if (targetPercentage && Math.abs(actualPercentage - targetPercentage) > 0.5) {
+          console.log("Position mismatch, trying percentage navigation");
+          const decimal = targetPercentage / 100;
+          const calculatedCfi = book.locations.cfiFromPercentage(decimal);
+          
+          if (calculatedCfi) {
+            await rendition.display(calculatedCfi);
+          }
         }
+      }
+    } catch (err) {
+      console.error("Error navigating to bookmark:", err);
+      // If all else fails, try one last time with the original CFI
+      try {
+        await rendition.display(bookmark.cfi);
+      } catch (fallbackErr) {
+        console.error("Error in fallback navigation:", fallbackErr);
       }
     }
   };
@@ -750,6 +787,7 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     }
   };
 
+  // Handle highlight deletion
   const handleHighlightDelete = async (cfi: string) => {
     if (!bookId) return;
     
@@ -760,15 +798,32 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
       
       await removeHighlight(bookId, cfi, isTranslated);
     
-    // Update local state
-    setHighlights(highlights.filter(h => h.cfi !== cfi));
+      // Update local state
+      setHighlights(highlights.filter(h => h.cfi !== cfi));
     
-    // Remove highlight from rendition
-    if (rendition) {
+      // Remove highlight from rendition
+      if (rendition) {
         rendition.annotations.remove(cfi, "highlight");
       }
-      } catch (err) {
+    } catch (err) {
       console.error("Error removing highlight:", err);
+    }
+  };
+
+  // Handle bookmark deletion
+  const handleBookmarkDelete = async (cfi: string) => {
+    if (!bookId) return;
+    
+    try {
+      await removeBookmark(bookId, cfi);
+      setBookmarks(bookmarks.filter(b => b.cfi !== cfi));
+      
+      // Update isCurrentPageBookmarked if the deleted bookmark was for the current page
+      if (location && location.cfi === cfi) {
+        setIsCurrentPageBookmarked(false);
+      }
+    } catch (error) {
+      console.error('Error deleting bookmark:', error);
     }
   };
 
