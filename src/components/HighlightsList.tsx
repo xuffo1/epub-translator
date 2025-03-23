@@ -52,9 +52,14 @@ const HighlightsList: React.FC<HighlightsListProps> = ({
                   {highlight.text}
                 </span>
               </div>
-              {highlight.chapter && (
-                <p className="text-xs text-gray-500 mt-1 ml-6">{highlight.chapter}</p>
-              )}
+              <div className="ml-6 mt-1 flex items-center text-xs text-gray-500">
+                {highlight.chapter && (
+                  <span className="mr-2">{highlight.chapter}</span>
+                )}
+                <span className="font-medium text-blue-600">
+                  {highlight.percentage?.toFixed(2)}%
+                </span>
+              </div>
               <p className="text-xs text-gray-400 mt-1 ml-6">{formatDate(highlight.createdAt)}</p>
             </button>
             <button

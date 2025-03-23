@@ -128,7 +128,11 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
           const loadedBookmarks = await getBookmarks(bookId);
       setBookmarks(loadedBookmarks);
       
-          const loadedHighlights = await getHighlights(bookId);
+          // Get current translation state
+          const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+          const isTranslated = translateElement?.value ? translateElement.value !== 'original' : false;
+          
+          const loadedHighlights = await getHighlights(bookId, isTranslated);
       setHighlights(loadedHighlights);
         } catch (error) {
           console.error('Error loading bookmarks and highlights:', error);
@@ -220,6 +224,49 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
       });
     }
   }, [rendition, highlights]);
+
+  // Reload highlights when translation state changes
+  useEffect(() => {
+    const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+    if (!translateElement) return;
+
+    const handleTranslationChange = async () => {
+      if (!bookId) return;
+      
+      try {
+        const isTranslated = translateElement.value !== 'original';
+        const loadedHighlights = await getHighlights(bookId, isTranslated);
+        setHighlights(loadedHighlights);
+        
+        // Reapply highlights to rendition
+        if (rendition) {
+          rendition.annotations.clear();
+          loadedHighlights.forEach(highlight => {
+            try {
+              rendition.annotations.add(
+                "highlight", 
+                highlight.cfi, 
+                {}, 
+                undefined, 
+                "hl", 
+                { 
+                  fill: highlight.color + "80",
+                  onClick: () => handleHighlightClick(highlight)
+                }
+              );
+            } catch (err) {
+              console.error("Error adding highlight:", err);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Error reloading highlights:', error);
+      }
+    };
+
+    translateElement.addEventListener('change', handleTranslationChange);
+    return () => translateElement.removeEventListener('change', handleTranslationChange);
+  }, [bookId, rendition]);
 
   useEffect(() => {
     let bookInstance: any = null;
@@ -416,6 +463,24 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
               // Hide translate menu if it's showing
               setShowTranslateMenu(false);
               
+              // Hide Google Translate popup
+              const googlePopup = document.querySelector('.goog-te-banner-frame') as HTMLElement;
+              if (googlePopup) {
+                googlePopup.style.display = 'none';
+              }
+              
+              // Minimize Google Translate widget
+              const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+              if (translateElement) {
+                translateElement.style.transform = 'scale(0.1)';
+                translateElement.style.opacity = '0.1';
+                // Restore after highlight menu closes
+                setTimeout(() => {
+                  translateElement.style.transform = 'scale(0.75)';
+                  translateElement.style.opacity = '1';
+                }, 2000);
+              }
+              
               // Show highlight menu instead
               const range = selection.getRangeAt(0);
               const rect = range.getBoundingClientRect();
@@ -605,93 +670,82 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
   };
 
   // Add helper function for percentage navigation
-  const navigateToPercentage = (percentage: number) => {
-    if (!book || !rendition) return;
+  const navigateToPercentage = async (percentage: number) => {
+    if (!book || !rendition || !book.locations || !book.locations.total) {
+      console.error('Cannot navigate: book or locations not ready');
+      return;
+    }
 
     try {
-      // Convert percentage to decimal
-      const decimal = percentage / 100;
-      console.log("Converting percentage to decimal:", decimal);
+      // Ensure percentage is between 0 and 100
+      const validPercentage = Math.max(0, Math.min(100, percentage));
+      console.log('Navigating to percentage:', validPercentage);
 
-      // Get CFI from percentage
-      const calculatedCfi = book.locations.cfiFromPercentage(decimal);
-      console.log("Calculated CFI:", calculatedCfi);
-
-      if (calculatedCfi) {
-        // Display the content at the calculated CFI
-        rendition.display(calculatedCfi).then(() => {
-          // Update location state after navigation
-          const currentLocation = rendition.currentLocation();
-          if (currentLocation && currentLocation.start) {
-            const locationObj = {
-              cfi: currentLocation.start.cfi,
-              href: currentLocation.start.href,
-              percentage: percentage,
-              location: currentLocation.start.location || 0
-            };
-            console.log("Setting new location:", locationObj);
-            setLocation(locationObj);
-
-            // Get current translation state
-            const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
-            const isTranslated = translateElement?.value ? translateElement.value !== 'original' : false;
-            
-            // Save reading progress
-            saveReadingProgress(bookId, {
-              ...locationObj,
-              lastRead: Date.now(),
-              isTranslated
-            });
-          }
-        });
-      } else {
-        console.warn("Could not calculate CFI from percentage");
+      // Get the CFI for this percentage
+      const decimal = validPercentage / 100;
+      const cfi = book.locations.cfiFromPercentage(decimal);
+      
+      if (!cfi) {
+        console.error('Failed to get CFI for percentage:', validPercentage);
+        return;
       }
-    } catch (err) {
-      console.error("Error in navigateToPercentage:", err);
+
+      // Navigate to the CFI
+      await rendition.display(cfi);
+    } catch (error) {
+      console.error('Error navigating to percentage:', error);
     }
   };
 
-  const handleBookmarkDelete = (cfi: string) => {
-    if (!bookId) return;
-    
-    removeBookmark(bookId, cfi);
-    
-    // Update local state
-    setBookmarks(bookmarks.filter(b => b.cfi !== cfi));
-  };
+  const handleHighlightClick = async (highlight: Highlight) => {
+    if (!rendition || !book) return;
 
-  const handleHighlightClick = (highlight: Highlight) => {
-    if (rendition && book) {
-      try {
-        // Use percentage for navigation if available
-        if (highlight.percentage && book.locations) {
-          console.log("Navigating to highlight percentage:", highlight.percentage);
-          
-          // Ensure locations are generated
-          if (!book.locations.total) {
-            console.log("Generating locations...");
-            book.locations.generate(1024).then(() => {
-              navigateToPercentage(highlight.percentage);
-            });
-          } else {
-            navigateToPercentage(highlight.percentage);
-          }
-        } else {
-          // Fallback to CFI if percentage is not available
-          console.log("Using original highlight CFI:", highlight.cfi);
-        rendition.display(highlight.cfi);
-        }
+    // Close sidebar immediately
         setShowSidebar(false);
+
+    try {
+      // Ensure we have locations generated
+      if (!book.locations || !book.locations.total) {
+        console.log("Generating locations...");
+        await book.locations.generate(1024);
+      }
+
+      // Use the CFI for initial navigation
+      if (highlight.cfi) {
+        console.log("Navigating to highlight CFI:", highlight.cfi);
+        
+        // Navigate using CFI first
+        await rendition.display(highlight.cfi);
+        
+        // Wait a moment for the navigation to complete
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Then verify and adjust if needed
+        const currentLocation = rendition.currentLocation();
+        if (currentLocation?.start) {
+          const actualPercentage = book.locations.percentageFromCfi(currentLocation.start.cfi);
+          console.log("Actual percentage:", actualPercentage * 100, "Expected:", highlight.percentage);
+          
+          // If we're not at the correct percentage, adjust
+          if (Math.abs((actualPercentage * 100) - highlight.percentage) > 0.5) {
+            console.log("Position mismatch, adjusting to correct percentage");
+            await navigateToPercentage(highlight.percentage);
+          }
+        }
+      } else if (typeof highlight.percentage === 'number') {
+        // Fallback to percentage navigation if no CFI
+        console.log("No CFI available, using percentage:", highlight.percentage);
+        await navigateToPercentage(highlight.percentage);
+      }
       } catch (err) {
         console.error("Error navigating to highlight:", err);
-        // Fallback to original CFI if anything fails
-        try {
-          rendition.display(highlight.cfi);
-          setShowSidebar(false);
-        } catch (fallbackErr) {
-          console.error("Error using fallback navigation:", fallbackErr);
+      // If navigation fails, try one last time with percentage
+      try {
+        if (typeof highlight.percentage === 'number') {
+          await navigateToPercentage(highlight.percentage);
         }
+      } catch (fallbackErr) {
+        console.error("Error in fallback navigation:", fallbackErr);
       }
     }
   };
@@ -700,7 +754,11 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     if (!bookId) return;
     
     try {
-      await removeHighlight(bookId, cfi);
+      // Get current translation state
+      const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+      const isTranslated = translateElement?.value ? translateElement.value !== 'original' : false;
+      
+      await removeHighlight(bookId, cfi, isTranslated);
     
     // Update local state
     setHighlights(highlights.filter(h => h.cfi !== cfi));
@@ -725,8 +783,60 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     setSearchResults([]);
     
     try {
-      const results = await book.search(searchQuery);
-      setSearchResults(results);
+      // Ensure locations are generated before searching
+      if (!book.locations || !book.locations.total) {
+        console.log("Generating locations before search...");
+        await book.locations.generate(1024);
+      }
+
+      // Normalize search query
+      const normalizedQuery = searchQuery.trim().toLowerCase();
+      console.log("Searching for:", normalizedQuery);
+
+      // Search in each spine item
+      const allResults = [];
+      const spineItems = book.spine.items;
+      
+      for (let item of spineItems) {
+        try {
+          const itemResults = await book.spine.get(item.href).load(book.load.bind(book));
+          const content = itemResults.content || itemResults;
+          
+          if (content) {
+            const text = content.textContent || '';
+            const normalizedText = text.toLowerCase();
+            let index = normalizedText.indexOf(normalizedQuery);
+            
+            while (index !== -1) {
+              // Get surrounding context (100 characters before and after)
+              const start = Math.max(0, index - 100);
+              const end = Math.min(text.length, index + normalizedQuery.length + 100);
+              const excerpt = text.slice(start, end).trim();
+              
+              // Get CFI for this position
+              const cfi = item.cfiFromRange(index, index + normalizedQuery.length);
+              
+              if (cfi) {
+                allResults.push({
+                  cfi,
+                  excerpt,
+                  percentage: book.locations.percentageFromCfi(cfi)
+                });
+              }
+              
+              index = normalizedText.indexOf(normalizedQuery, index + 1);
+            }
+          }
+        } catch (err) {
+          console.error("Error searching in spine item:", err);
+        }
+      }
+
+      // Sort results by percentage
+      const sortedResults = allResults.sort((a, b) => (a.percentage || 0) - (b.percentage || 0));
+      
+      console.log("Found results:", sortedResults.length);
+      setSearchResults(sortedResults);
     } catch (err) {
       console.error("Error searching:", err);
     } finally {
@@ -734,13 +844,65 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     }
   };
 
-  const goToSearchResult = (cfi: string) => {
-    if (rendition) {
+  const goToSearchResult = async (cfi: string) => {
+    if (!rendition || !book) return;
+
+    try {
+      console.log("Navigating to search result CFI:", cfi);
+      
+      // First try using the CFI directly
+      await rendition.display(cfi);
+      
+      // Get the current location after navigation
+      const currentLocation = rendition.currentLocation();
+      if (currentLocation?.start) {
+        // Calculate percentage for the current position
+        const percentage = book.locations.percentageFromCfi(currentLocation.start.cfi);
+        console.log("Search result percentage:", percentage * 100);
+        
+        // Update location state
+        const locationObj = {
+          cfi: currentLocation.start.cfi,
+          href: currentLocation.start.href || '',
+          percentage: parseFloat((percentage * 100).toFixed(2)),
+          location: currentLocation.start.location || 0
+        };
+        setLocation(locationObj);
+
+        // Get current translation state
+        const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+        const isTranslated = translateElement?.value ? translateElement.value !== 'original' : false;
+        
+        // Save reading progress
+        saveReadingProgress(bookId, {
+          ...locationObj,
+          lastRead: Date.now(),
+          isTranslated
+        });
+      }
+
+      // Close sidebar after successful navigation
+      setShowSidebar(false);
+      
+      // Highlight the search result
+      rendition.annotations.highlight(cfi, {}, (e: Event) => {
+        // Remove the highlight after a delay
+        setTimeout(() => {
+          rendition.annotations.remove(cfi, "highlight");
+        }, 2000);
+      });
+    } catch (err) {
+      console.error("Error navigating to search result:", err);
+      
+      // Try alternative navigation if direct CFI fails
       try {
-        rendition.display(cfi);
-        setShowSidebar(false);
-      } catch (err) {
-        console.error("Error navigating to search result:", err);
+        const spineItem = book.spine.get(cfi);
+        if (spineItem) {
+          await rendition.display(spineItem.href);
+          setShowSidebar(false);
+        }
+      } catch (fallbackErr) {
+        console.error("Error in fallback navigation:", fallbackErr);
       }
     }
   };
@@ -779,6 +941,10 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     
     const { cfiRange, text } = currentSelection;
     
+    // Get current translation state
+    const translateElement = document.querySelector('.goog-te-combo') as HTMLSelectElement;
+    const isTranslated = translateElement?.value ? translateElement.value !== 'original' : false;
+    
     // Create highlight object with percentage
     const newHighlight: Highlight = {
       cfi: cfiRange,
@@ -790,8 +956,8 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
     };
     
     try {
-    // Save to localStorage
-      await saveHighlight(bookId, newHighlight);
+      // Save to localStorage with translation state
+      await saveHighlight(bookId, newHighlight, isTranslated);
     
     // Update local state
     setHighlights([...highlights, newHighlight]);
@@ -854,6 +1020,21 @@ const Reader: React.FC<ReaderProps> = ({ file, onClose }) => {
       tabIndex={0} 
       onKeyDown={handleKeyDown}
     >
+      <style jsx global>{`
+        .goog-te-banner-frame {
+          display: none !important;
+        }
+        .goog-te-combo {
+          transition: all 0.3s ease-in-out !important;
+        }
+        .skiptranslate {
+          opacity: 1;
+          transition: opacity 0.3s ease-in-out;
+        }
+        .skiptranslate.minimized {
+          opacity: 0.1;
+        }
+      `}</style>
       {/* Header */}
       <header className={`flex items-center justify-between p-4 ${readerSettings.theme === 'dark' ? 'bg-gray-800 text-white' : 'bg-white shadow-sm'}`}>
         <div className="flex items-center">

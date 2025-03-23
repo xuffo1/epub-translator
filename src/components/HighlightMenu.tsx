@@ -1,6 +1,6 @@
 import React from 'react';
 import { HIGHLIGHT_COLORS } from '../types';
-import { Copy, Search } from 'lucide-react';
+import { Copy } from 'lucide-react';
 
 interface HighlightMenuProps {
   onHighlight: (color: string) => void;
@@ -11,8 +11,7 @@ interface HighlightMenuProps {
 
 const HighlightMenu: React.FC<HighlightMenuProps> = ({ 
   onHighlight, 
-  onCopy, 
-  onSearch, 
+  onCopy,
   position 
 }) => {
   return (
@@ -24,22 +23,13 @@ const HighlightMenu: React.FC<HighlightMenuProps> = ({
         width: '150px'
       }}
     >
-      <div className="flex justify-between items-center">
-        <button
-          onClick={onCopy}
-          className="p-2 rounded-md hover:bg-gray-100 text-gray-700 flex items-center text-sm"
-        >
-          <Copy size={16} className="mr-1" />
-          Copy
-        </button>
-        <button
-          onClick={onSearch}
-          className="p-2 rounded-md hover:bg-gray-100 text-gray-700 flex items-center text-sm"
-        >
-          <Search size={16} className="mr-1" />
-          Search
-        </button>
-      </div>
+      <button
+        onClick={onCopy}
+        className="p-2 rounded-md hover:bg-gray-100 text-gray-700 flex items-center text-sm"
+      >
+        <Copy size={16} className="mr-1" />
+        Copy
+      </button>
       
       <div className="flex justify-between">
         {HIGHLIGHT_COLORS.map(color => (

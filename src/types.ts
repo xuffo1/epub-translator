@@ -83,11 +83,9 @@ export type LanguageOption = {
 
 // Highlight colors
 export const HIGHLIGHT_COLORS = [
-  { id: 'yellow', value: '#ffeb3b' },
-  { id: 'pink', value: '#f8bbd0' },
-  { id: 'blue', value: '#90caf9' },
-  { id: 'green', value: '#c5e1a5' },
-  { id: 'purple', value: '#d1c4e9' }
+  { id: 'blue', value: '#4a9eff' },
+  { id: 'green', value: '#4caf50' },
+  { id: 'red', value: '#ff5252' }
 ];
 
 // Comprehensive language list for translation

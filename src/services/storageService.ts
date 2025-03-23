@@ -46,6 +46,75 @@ const highlightStore = localforage.createInstance({
   storeName: 'highlights'
 });
 
+// Initialize storage with fallback options
+const initializeStorage = () => {
+  localforage.setDriver([
+    localforage.INDEXEDDB,
+    localforage.WEBSQL,
+    localforage.LOCALSTORAGE
+  ]).catch(err => {
+    console.error('Error initializing storage:', err);
+  });
+};
+
+// Call initialization
+initializeStorage();
+
+// Helper function to safely parse JSON with fallback
+const safeJSONParse = (str: string | null, fallback: any = null): any => {
+  if (!str) return fallback;
+  try {
+    return JSON.parse(str);
+  } catch (e) {
+    console.error('Error parsing JSON:', e);
+    return fallback;
+  }
+};
+
+// Helper function to safely stringify JSON
+const safeJSONStringify = (data: any, fallback: string = '{}'): string => {
+  try {
+    return JSON.stringify(data);
+  } catch (e) {
+    console.error('Error stringifying JSON:', e);
+    return fallback;
+  }
+};
+
+// Helper function to safely access storage
+const safeStorageGet = (key: string, fallback: any = null): any => {
+  try {
+    const value = localStorage.getItem(key);
+    return safeJSONParse(value, fallback);
+  } catch (e) {
+    console.error('Error accessing storage:', e);
+    return fallback;
+  }
+};
+
+// Helper function to safely set storage
+const safeStorageSet = (key: string, value: any): void => {
+  try {
+    localStorage.setItem(key, safeJSONStringify(value));
+  } catch (e) {
+    console.error('Error setting storage:', e);
+    // Try to clear some space if storage is full
+    try {
+      const keysToPreserve = [READING_PROGRESS_KEY, READER_SETTINGS_KEY];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && !keysToPreserve.includes(key)) {
+          localStorage.removeItem(key);
+        }
+      }
+      // Try setting the item again
+      localStorage.setItem(key, safeJSONStringify(value));
+    } catch (retryError) {
+      console.error('Error retrying storage set:', retryError);
+    }
+  }
+};
+
 // Convert blob URL to base64
 const blobToBase64 = async (blobUrl: string): Promise<string> => {
   try {
@@ -139,10 +208,41 @@ export const saveBook = async (book: Book): Promise<void> => {
 export const getAllBooks = async (): Promise<Book[]> => {
   try {
     const books: Book[] = [];
+    const readingProgressData = safeStorageGet(READING_PROGRESS_KEY, {});
+    
+    // Get all books first
     await bookStore.iterate((value: any) => {
+      // Only add valid books (must have at least id and title)
+      if (value && typeof value === 'object' && value.id && value.title) {
       books.push(value as Book);
+      } else {
+        console.warn('Found invalid book entry:', value);
+        // Optionally clean up invalid entries
+        if (value && value.id) {
+          bookStore.removeItem(value.id).catch(err => {
+            console.error('Error removing invalid book:', err);
+          });
+        }
+      }
     });
-    return books.sort((a, b) => b.addedAt - a.addedAt);
+
+    // Sort books by last read time (from reading progress) and then by added date
+    return books.sort((a, b) => {
+      const progressA = readingProgressData[a.id];
+      const progressB = readingProgressData[b.id];
+      
+      // If both books have reading progress, compare their last read times
+      if (progressA?.lastRead && progressB?.lastRead) {
+        return progressB.lastRead - progressA.lastRead;
+      }
+      
+      // If only one book has reading progress, it should come first
+      if (progressA?.lastRead) return -1;
+      if (progressB?.lastRead) return 1;
+      
+      // If neither has reading progress, sort by added date
+      return b.addedAt - a.addedAt;
+    });
   } catch (error) {
     console.error('Error getting books:', error);
     return [];
@@ -385,16 +485,22 @@ export const getBookmarks = async (bookId: string): Promise<Bookmark[]> => {
     }
 
     // Fallback to localStorage if not in cache
-    const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+    const allBookmarks = safeStorageGet(BOOKMARKS_KEY, {});
     const bookmarks = allBookmarks[bookId] || [];
 
     // Cache the bookmarks
-    await bookmarkStore.setItem(`${bookId}_bookmarks`, bookmarks);
+    try {
+      await bookmarkStore.setItem(`${bookId}_bookmarks`, bookmarks);
+    } catch (cacheError) {
+      console.error('Error caching bookmarks:', cacheError);
+    }
     
     return bookmarks;
   } catch (error) {
     console.error('Error getting bookmarks:', error);
-    return [];
+    // Final fallback to localStorage
+    const allBookmarks = safeStorageGet(BOOKMARKS_KEY, {});
+    return allBookmarks[bookId] || [];
   }
 };
 
@@ -414,9 +520,9 @@ export const saveBookmark = async (bookId: string, bookmark: Bookmark): Promise<
     await bookmarkStore.setItem(`${bookId}_bookmarks`, bookmarks);
     
     // Also save to localStorage for backup
-    const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+    const allBookmarks = safeStorageGet(BOOKMARKS_KEY, {});
     allBookmarks[bookId] = bookmarks;
-    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(allBookmarks));
+    safeStorageSet(BOOKMARKS_KEY, allBookmarks);
   } catch (error) {
     console.error('Error saving bookmark:', error);
   }
@@ -432,9 +538,9 @@ export const removeBookmark = async (bookId: string, cfi: string): Promise<void>
     await bookmarkStore.setItem(`${bookId}_bookmarks`, updatedBookmarks);
     
     // Also update localStorage
-    const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+    const allBookmarks = safeStorageGet(BOOKMARKS_KEY, {});
     allBookmarks[bookId] = updatedBookmarks;
-    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(allBookmarks));
+    safeStorageSet(BOOKMARKS_KEY, allBookmarks);
   } catch (error) {
     console.error('Error removing bookmark:', error);
   }
@@ -446,26 +552,29 @@ export const removeAllBookmarksForBook = async (bookId: string): Promise<void> =
     await bookmarkStore.removeItem(`${bookId}_bookmarks`);
     
     // Remove from localStorage
-    const allBookmarks = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+    const allBookmarks = safeStorageGet(BOOKMARKS_KEY, {});
     delete allBookmarks[bookId];
-    localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(allBookmarks));
+    safeStorageSet(BOOKMARKS_KEY, allBookmarks);
   } catch (error) {
     console.error('Error removing all bookmarks:', error);
   }
 };
 
 // Highlights
-export const getHighlights = async (bookId: string): Promise<Highlight[]> => {
+export const getHighlights = async (bookId: string, isTranslated: boolean = false): Promise<Highlight[]> => {
   try {
+    // Use different key for translated version
+    const key = isTranslated ? `${bookId}_translated` : bookId;
+    
     // Try to get from localforage first
-    const cachedHighlights = await highlightStore.getItem(`${bookId}_highlights`);
+    const cachedHighlights = await highlightStore.getItem(`${key}_highlights`);
     if (cachedHighlights) {
       return cachedHighlights as Highlight[];
     }
 
     // Fallback to localStorage if not in cache
-    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
-    const highlights = allHighlights[bookId] || [];
+    const allHighlights = safeStorageGet(HIGHLIGHTS_KEY, {});
+    const highlights = allHighlights[key] || [];
     
     // Ensure all highlights have a percentage field
     const validatedHighlights = highlights.map((h: Highlight) => ({
@@ -474,7 +583,7 @@ export const getHighlights = async (bookId: string): Promise<Highlight[]> => {
     }));
 
     // Cache the highlights
-    await highlightStore.setItem(`${bookId}_highlights`, validatedHighlights);
+    await highlightStore.setItem(`${key}_highlights`, validatedHighlights);
     
     return validatedHighlights;
   } catch (error) {
@@ -483,10 +592,13 @@ export const getHighlights = async (bookId: string): Promise<Highlight[]> => {
   }
 };
 
-export const saveHighlight = async (bookId: string, highlight: Highlight): Promise<void> => {
+export const saveHighlight = async (bookId: string, highlight: Highlight, isTranslated: boolean = false): Promise<void> => {
   try {
+    // Use different key for translated version
+    const key = isTranslated ? `${bookId}_translated` : bookId;
+    
     // Get current highlights from cache
-    const highlights = await getHighlights(bookId);
+    const highlights = await getHighlights(bookId, isTranslated);
     const existingIndex = highlights.findIndex(h => h.cfi === highlight.cfi);
     
     if (existingIndex >= 0) {
@@ -496,30 +608,33 @@ export const saveHighlight = async (bookId: string, highlight: Highlight): Promi
     }
     
     // Save to cache
-    await highlightStore.setItem(`${bookId}_highlights`, highlights);
+    await highlightStore.setItem(`${key}_highlights`, highlights);
     
     // Also save to localStorage for backup
-    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
-    allHighlights[bookId] = highlights;
-    localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(allHighlights));
+    const allHighlights = safeStorageGet(HIGHLIGHTS_KEY, {});
+    allHighlights[key] = highlights;
+    safeStorageSet(HIGHLIGHTS_KEY, allHighlights);
   } catch (error) {
     console.error('Error saving highlight:', error);
   }
 };
 
-export const removeHighlight = async (bookId: string, cfi: string): Promise<void> => {
+export const removeHighlight = async (bookId: string, cfi: string, isTranslated: boolean = false): Promise<void> => {
   try {
+    // Use different key for translated version
+    const key = isTranslated ? `${bookId}_translated` : bookId;
+    
     // Get current highlights from cache
-    const highlights = await getHighlights(bookId);
+    const highlights = await getHighlights(bookId, isTranslated);
     const updatedHighlights = highlights.filter(h => h.cfi !== cfi);
     
     // Save to cache
-    await highlightStore.setItem(`${bookId}_highlights`, updatedHighlights);
+    await highlightStore.setItem(`${key}_highlights`, updatedHighlights);
     
     // Also update localStorage
-    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
-    allHighlights[bookId] = updatedHighlights;
-    localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(allHighlights));
+    const allHighlights = safeStorageGet(HIGHLIGHTS_KEY, {});
+    allHighlights[key] = updatedHighlights;
+    safeStorageSet(HIGHLIGHTS_KEY, allHighlights);
   } catch (error) {
     console.error('Error removing highlight:', error);
   }
@@ -527,13 +642,15 @@ export const removeHighlight = async (bookId: string, cfi: string): Promise<void
 
 export const removeAllHighlightsForBook = async (bookId: string): Promise<void> => {
   try {
-    // Remove from cache
+    // Remove both original and translated highlights from cache
     await highlightStore.removeItem(`${bookId}_highlights`);
+    await highlightStore.removeItem(`${bookId}_translated_highlights`);
     
     // Remove from localStorage
-    const allHighlights = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY) || '{}');
+    const allHighlights = safeStorageGet(HIGHLIGHTS_KEY, {});
     delete allHighlights[bookId];
-    localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(allHighlights));
+    delete allHighlights[`${bookId}_translated`];
+    safeStorageSet(HIGHLIGHTS_KEY, allHighlights);
   } catch (error) {
     console.error('Error removing all highlights:', error);
   }
@@ -542,7 +659,7 @@ export const removeAllHighlightsForBook = async (bookId: string): Promise<void> 
 // Reader Settings
 export const getReaderSettings = (): ReaderSettings => {
   try {
-    const settings = JSON.parse(localStorage.getItem(READER_SETTINGS_KEY) || '{}');
+    const settings = safeStorageGet(READER_SETTINGS_KEY, DEFAULT_READER_SETTINGS);
     return { ...DEFAULT_READER_SETTINGS, ...settings };
   } catch (error) {
     console.error('Error getting reader settings:', error);
@@ -552,7 +669,7 @@ export const getReaderSettings = (): ReaderSettings => {
 
 export const saveReaderSettings = (settings: ReaderSettings): void => {
   try {
-    localStorage.setItem(READER_SETTINGS_KEY, JSON.stringify(settings));
+    safeStorageSet(READER_SETTINGS_KEY, settings);
   } catch (error) {
     console.error('Error saving reader settings:', error);
   }
@@ -561,41 +678,41 @@ export const saveReaderSettings = (settings: ReaderSettings): void => {
 // Reading Progress
 export const saveReadingProgress = (bookId: string, progress: ReadingProgress): void => {
   try {
-    // Validate progress data
     if (!progress.cfi || typeof progress.percentage !== 'number') {
       console.error('Invalid progress data:', progress);
       return;
     }
 
-    const allProgress = JSON.parse(localStorage.getItem(READING_PROGRESS_KEY) || '{}');
+    const allProgress = safeStorageGet(READING_PROGRESS_KEY, {});
     
-    // Add timestamp and ensure percentage is valid
     const validatedProgress = {
       ...progress,
       lastRead: Date.now(),
-      // Ensure percentage is between 0 and 100 with 2 decimal places
       percentage: Math.max(0, Math.min(100, parseFloat(progress.percentage.toFixed(2)))),
-      // Ensure we have all necessary fields
       cfi: progress.cfi,
       href: progress.href,
       location: progress.location || 0
     };
 
-    // Store separate progress for translated and non-translated states
     const key = progress.isTranslated ? `${bookId}_translated` : bookId;
     
-    // Log the progress being saved
     console.log(`Saving progress for ${key}:`, validatedProgress);
     
     allProgress[key] = validatedProgress;
-    localStorage.setItem(READING_PROGRESS_KEY, JSON.stringify(allProgress));
-
-    // Backup to sessionStorage for redundancy
+    safeStorageSet(READING_PROGRESS_KEY, allProgress);
+    
+    // Backup to multiple storage mechanisms
     try {
+      // Try sessionStorage
       sessionStorage.setItem(
         `${READING_PROGRESS_KEY}_${key}`,
-        JSON.stringify(validatedProgress)
+        safeJSONStringify(validatedProgress)
       );
+      
+      // Try localforage as additional backup
+      bookStore.setItem(`progress_${key}`, validatedProgress).catch(err => {
+        console.error('Error saving progress to localforage:', err);
+      });
     } catch (err) {
       console.error('Error saving progress backup:', err);
     }
@@ -607,48 +724,48 @@ export const saveReadingProgress = (bookId: string, progress: ReadingProgress): 
 export const getReadingProgress = (bookId: string, isTranslated: boolean = false): ReadingProgress | null => {
   try {
     const key = isTranslated ? `${bookId}_translated` : bookId;
-    const allProgress = JSON.parse(localStorage.getItem(READING_PROGRESS_KEY) || '{}');
-    const progress = allProgress[key];
+    const allProgress = safeStorageGet(READING_PROGRESS_KEY, {});
+    let progress = allProgress[key];
 
-    // Log the progress being retrieved
-    console.log(`Getting progress for ${key}:`, progress);
+    // If no progress in localStorage, try other storage mechanisms
+    if (!progress?.cfi) {
+      // Try sessionStorage
+      try {
+        const sessionProgress = safeJSONParse(
+          sessionStorage.getItem(`${READING_PROGRESS_KEY}_${key}`)
+        );
+        if (sessionProgress?.cfi) {
+          progress = sessionProgress;
+        }
+      } catch (sessionError) {
+        console.error('Error reading from sessionStorage:', sessionError);
+      }
 
-    // Validate progress data
+      // If still no progress, try localforage
+      if (!progress?.cfi) {
+        bookStore.getItem(`progress_${key}`).then(forageProgress => {
+          if (forageProgress) {
+            progress = forageProgress;
+            // Sync back to localStorage
+            const updatedProgress = { ...allProgress, [key]: progress };
+            safeStorageSet(READING_PROGRESS_KEY, updatedProgress);
+          }
+        }).catch(err => {
+          console.error('Error reading from localforage:', err);
+        });
+      }
+    }
+
     if (progress?.cfi && typeof progress.percentage === 'number') {
-      // Ensure all required fields are present with proper formatting
       const validatedProgress = {
         cfi: progress.cfi,
         href: progress.href || '',
-        // Ensure percentage maintains 2 decimal places
         percentage: parseFloat(progress.percentage.toFixed(2)),
         lastRead: progress.lastRead || Date.now(),
         isTranslated: !!progress.isTranslated,
         location: progress.location || 0
       };
       return validatedProgress;
-    }
-
-    // Try backup storage if primary fails
-    try {
-      const backupProgress = JSON.parse(
-        sessionStorage.getItem(`${READING_PROGRESS_KEY}_${key}`) || 'null'
-      );
-      
-      if (backupProgress?.cfi && typeof backupProgress.percentage === 'number') {
-        // Restore from backup to primary storage with proper formatting
-        const validatedBackup = {
-          ...backupProgress,
-          isTranslated,
-          lastRead: backupProgress.lastRead || Date.now(),
-          location: backupProgress.location || 0,
-          // Ensure percentage maintains 2 decimal places
-          percentage: parseFloat(backupProgress.percentage.toFixed(2))
-        };
-        saveReadingProgress(bookId, validatedBackup);
-        return validatedBackup;
-      }
-    } catch (err) {
-      console.error('Error reading progress backup:', err);
     }
 
     return null;
@@ -660,13 +777,13 @@ export const getReadingProgress = (bookId: string, isTranslated: boolean = false
 
 export const removeReadingProgress = (bookId: string): void => {
   try {
-    const allProgress = JSON.parse(localStorage.getItem(READING_PROGRESS_KEY) || '{}');
+    const allProgress = safeStorageGet(READING_PROGRESS_KEY, {});
     
     // Remove both translated and non-translated progress
     delete allProgress[bookId];
     delete allProgress[`${bookId}_translated`];
     
-    localStorage.setItem(READING_PROGRESS_KEY, JSON.stringify(allProgress));
+    safeStorageSet(READING_PROGRESS_KEY, allProgress);
 
     // Remove from backup storage
     try {
